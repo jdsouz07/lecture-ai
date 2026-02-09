@@ -3,21 +3,24 @@
 import React, { useRef, useState } from "react";
 
 export default function RecordPage() {
+  // --- CLEANED UP STATES ---
   const [recording, setRecording] = useState(false);
   const [status, setStatus] = useState<string>("Idle");
   const [liveText, setLiveText] = useState<string>("");
   const [chunkStatus, setChunkStatus] = useState<string>("");
+  const [simpleSummary, setSimpleSummary] = useState<string>(""); // For Gemini's output
+  const [lastSummaryIndex, setLastSummaryIndex] = useState(0); // Tracks what Gemini has read
 
+  // --- REFS ---
   const wsRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-
-  // Rolling buffer of recent audio blobs (for near-real-time chunk transcription)
   const rollingBlobsRef = useRef<Blob[]>([]);
   const transcribeTimerRef = useRef<number | null>(null);
 
-  const TIMESLICE_MS = 500; // must match mr.start(...)
-  const TRANSCRIBE_EVERY_MS = 15000; // 15s updates feel "live"
+  // --- CONSTANTS ---
+  const TIMESLICE_MS = 250; // Dropped to 250 for faster feel
+  const TRANSCRIBE_EVERY_MS = 10000; // Updated to 10s per your request
   const OVERLAP_MS = 2000; // keep ~2s overlap to reduce cut words at boundaries
 
   async function transcribeRollingChunk() {
@@ -78,21 +81,25 @@ export default function RecordPage() {
 
     wsRef.current = ws;
 
-    // --- ADD THIS SECTION --- this is the Deepgram addition
+    // Inside your start() function, right after wsRef.current = ws;
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        
+        // This matches the { type: "transcript", text: "..." } from your server
         if (data.type === "transcript") {
-          // This pushes the instant words into your state
           setLiveText((prev) => (prev ? `${prev} ${data.text}` : data.text));
           
-          // Optional: Logic to auto-scroll to bottom
+          // AUTO-SCROLL: Keep the latest text in view
+          const box = document.getElementById("transcript-box");
+          if (box) {
+            box.scrollTop = box.scrollHeight;
+          }
         }
-      } catch (err) {
-        // Ignore if message isn't JSON
+      } catch (e) {
+        console.error("Error receiving transcript:", e);
       }
     };
-    // -------------------------
 
     // Reset transcript + buffers when starting
     setLiveText("");
@@ -156,58 +163,87 @@ export default function RecordPage() {
     await transcribeRollingChunk();
   }
 
+
   return (
-  <main style={{ padding: 24, maxWidth: "1200px", margin: "0 auto", fontFamily: "sans-serif" }}>
-    <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
-      <div>
-        <h1 style={{ margin: 0, color: "#3b82f6" }}>Lecture AI</h1>
-        <p style={{ margin: 0, opacity: 0.7 }}>Status: <strong>{status}</strong></p>
+    <main style={{ padding: 24, maxWidth: "1200px", margin: "0 auto", fontFamily: "sans-serif" }}>
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
+        <div>
+          <h1 style={{ margin: 0, color: "#3b82f6" }}>Lecture AI</h1>
+          <p style={{ margin: 0, opacity: 0.7 }}>Status: <strong>{status}</strong></p>
+        </div>
+        
+        {!recording ? (
+          <button onClick={start} style={{ padding: "12px 24px", borderRadius: "8px", backgroundColor: "#2563eb", color: "white", border: "none", cursor: "pointer", fontWeight: "bold" }}>
+            Start Learning
+          </button>
+        ) : (
+          <button onClick={stop} style={{ padding: "12px 24px", borderRadius: "8px", backgroundColor: "#dc2626", color: "white", border: "none", cursor: "pointer", fontWeight: "bold" }}>
+            Stop Session
+          </button>
+        )}
+      </header>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px" }}>
+        {/* LEFT COLUMN: The Fast Raw Text from Deepgram */}
+        <section>
+          <h3 style={{ marginBottom: 12 }}>Live Lecture Feed</h3>
+          <div 
+            id="transcript-box"
+            style={{ 
+              background: "#111", 
+              color: "#aaa", 
+              padding: 16, 
+              borderRadius: 12, 
+              height: "400px", 
+              overflowY: "auto", 
+              fontSize: "14px", 
+              lineHeight: "1.6" 
+            }}
+          >
+            {liveText || "Waiting for teacher to speak..."}
+          </div>
+        </section>
+
+        {/* RIGHT COLUMN: The AI "Simple Mode" from Gemini */}
+        <section>
+          <h3 style={{ marginBottom: 12, color: "#3b82f6" }}>✨ Simple Mode (Real-Time Help)</h3>
+          <div style={{ 
+            background: "#eff6ff", 
+            color: "#1e40af", 
+            padding: 20, 
+            borderRadius: 12, 
+            height: "400px", 
+            overflowY: "auto", 
+            border: "2px solid #bfdbfe", 
+            boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)" 
+          }}>
+            {chunkStatus === "Transcribing chunk..." ? (
+              <p style={{ fontStyle: "italic", opacity: 0.6 }}>AI is thinking...</p>
+            ) : (
+              <div style={{ fontSize: "16px", fontWeight: "500", whiteSpace: "pre-wrap" }}>
+                {simpleSummary || "Summaries will appear here every 30 seconds..."}
+              </div>
+            )}
+          </div>
+        </section>
       </div>
-      
-      {!recording ? (
-        <button onClick={start} style={{ padding: "12px 24px", borderRadius: "8px", backgroundColor: "#2563eb", color: "white", border: "none", cursor: "pointer", fontWeight: "bold" }}>
-          Start Learning
-        </button>
-      ) : (
-        <button onClick={stop} style={{ padding: "12px 24px", borderRadius: "8px", backgroundColor: "#dc2626", color: "white", border: "none", cursor: "pointer", fontWeight: "bold" }}>
-          Stop Session
-        </button>
-      )}
-    </header>
 
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px" }}>
-      {/* LEFT COLUMN: The Fast Raw Text */}
-      <section>
-        <h3 style={{ marginBottom: 12 }}>Live Lecture Feed</h3>
-        <div style={{ background: "#111", color: "#aaa", padding: 16, borderRadius: 12, height: "400px", overflowY: "auto", fontSize: "14px", lineHeight: "1.6" }}>
-          {liveText || "Waiting for teacher to speak..."}
+      {/* ASK A QUESTION BOX */}
+      <footer style={{ marginTop: 24 }}>
+        <div style={{ display: "flex", gap: "12px" }}>
+          <input 
+            type="text" 
+            placeholder="Confused? Ask a specific question here..." 
+            style={{ flex: 1, padding: "16px", borderRadius: "12px", border: "1px solid #ddd", fontSize: "16px" }}
+          />
+          <button 
+            onClick={() => setLiveText("")} 
+            style={{ padding: "0 20px", borderRadius: "12px", background: "#64748b", color: "white", border: "none", cursor: "pointer" }}
+          >
+            Clear
+          </button>
         </div>
-      </section>
-
-      {/* RIGHT COLUMN: The AI "Simple Mode" */}
-      <section>
-        <h3 style={{ marginBottom: 12, color: "#3b82f6" }}>✨ Simple Mode (Real-Time Help)</h3>
-        <div style={{ background: "#eff6ff", color: "#1e40af", padding: 20, borderRadius: 12, height: "400px", overflowY: "auto", border: "2px solid #bfdbfe", boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)" }}>
-          {chunkStatus === "Transcribing chunk..." ? (
-            <p style={{ fontStyle: "italic", opacity: 0.6 }}>AI is thinking...</p>
-          ) : (
-            <div style={{ fontSize: "16px", fontWeight: "500" }}>
-              {/* This will display the summary Gemini returns */}
-              {liveText ? "Summary will appear here after the first 15 seconds..." : "Click Start to begin simplifying the lecture."}
-            </div>
-          )}
-        </div>
-      </section>
-    </div>
-
-    {/* ASK A QUESTION BOX */}
-    <footer style={{ marginTop: 24 }}>
-      <input 
-        type="text" 
-        placeholder="Confused? Ask a specific question here..." 
-        style={{ width: "100%", padding: "16px", borderRadius: "12px", border: "1px solid #ddd", fontSize: "16px" }}
-      />
-    </footer>
-  </main>
-);
+      </footer>
+    </main>
+  );
 }
